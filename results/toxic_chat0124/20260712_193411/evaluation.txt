@@ -1,0 +1,15 @@
+===== EVALUACIÓN =====
+
+Accuracy : 0.9459
+Precision: 0.7583
+Recall   : 0.4167
+F1-score : 0.5378
+
+              precision    recall  f1-score   support
+
+        safe       0.95      0.99      0.97      4698
+       toxic       0.76      0.42      0.54       384
+
+    accuracy                           0.95      5082
+   macro avg       0.86      0.70      0.75      5082
+weighted avg       0.94      0.95      0.94      5082

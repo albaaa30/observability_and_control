@@ -1,0 +1,1 @@
+Si se llama a la API y no hay ningún archivo api_cache.db, se crea uno en la misma carpeta de resultados.
