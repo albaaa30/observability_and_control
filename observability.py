@@ -1,37 +1,80 @@
+import os
 import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 from spellchecker import SpellChecker
 import re
 import requests
 import logging
-from pathlib import Path
 import csv
+import time
+from utils import get_cached_response, save_cached_response
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+last_call = 0
 
-def use_api(text, api_url, attributes, languages):
+
+def use_api(text, api_url, attributes, languages, cache_db, interval=1.0, max_retries=5):
+    global last_call
+    cached = get_cached_response(cache_db, text)
+
+    if cached is not None:
+        return cached
+
     data = {
         "comment": {"text": text},
         "languages": languages,
         "requestedAttributes": attributes
     }
-    try:
-        resp = requests.post(api_url, json=data)
-        resp.raise_for_status()
-        result = resp.json()
-        attr_scores = result.get("attributeScores", {})
-        scores = {attr: attr_scores.get(attr, {}).get("summaryScore", {}).get("value", 0.0)
-                  for attr in attributes.keys()}
-        return scores
-    except Exception as e:
-        logging.warning(f"Error al consultar API: {e}")
-        return {a: 0.0 for a in attributes.keys()}
 
-def compute_metrics(mode, languages, url, attributes, agent_answers, dictionary_offensive_words, risk_threshold):
+    for attempt in range(max_retries):
+        elapsed = time.time() - last_call
+        if elapsed < interval:
+            time.sleep(interval - elapsed)
+        try:
+            resp = requests.post(api_url, json=data, timeout=30)
+            if resp.status_code == 200:
+                last_call = time.time()
+                result = resp.json()
+                attr_scores = result.get("attributeScores", {})
+                scores = {
+                    attr: attr_scores.get(attr, {})
+                    .get("summaryScore", {})
+                    .get("value", 0.0)
+                    for attr in attributes.keys()
+                }
+                save_cached_response(cache_db, text, scores)
+                return scores
+            elif resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                if retry_after:
+                    wait = int(retry_after)
+                else:
+                    wait = 2 ** attempt
+                logging.warning(f"429 rate limit → retry in {wait}s")
+                time.sleep(wait)
+            else:
+                logging.warning(f"Error {resp.status_code}: {resp.text}")
+                return {}
+
+        except Exception as e:
+            wait = 2 ** attempt
+            logging.warning(f"Exception: {e} → re  try in {wait}s")
+            time.sleep(wait)
+
+    logging.error(f"Fallo tras {max_retries} intentos.")
+    return {}
+
+
+def compute_metrics(mode, languages, url, attributes, evaluation_attributes, agent_answers, dictionary_offensive_words,
+                    risk_threshold, cache_db):
     spell = SpellChecker(language=languages[0])
     metrics = []
-
-    for r in agent_answers: #answer
+    print(f"Comenzando el procesamiento de {len(agent_answers)} respuestas.")
+    logging.info(f"Comenzando el procesamiento de {len(agent_answers)} respuestas.")
+    for i, r in enumerate(agent_answers, start=1):
+        if i % 100 == 0:
+            percentage = 100 * i / len(agent_answers)
+            print(f"\rProcesadas {i}/{len(agent_answers)} ({percentage:.1f}%)",end="",flush=True)
+            logging.info(f"{i}/{len(agent_answers)} {percentage:.1f}% respuestas procesadas.")
         palabras = re.findall(r"\w+", r.lower())
         total_palabras = len(palabras)
         palabras_unicas = len(set(palabras))
@@ -49,17 +92,24 @@ def compute_metrics(mode, languages, url, attributes, agent_answers, dictionary_
         riesgo_flag = False
 
         if mode == "use_api":
-            scores_api = use_api(r, url, attributes, languages)
-            riesgo_flag = any(score >= risk_threshold for score in scores_api.values())
+            scores_api = use_api(r, url, attributes, languages, cache_db)
+            riesgo_flag = any(scores_api.get(attr, 0) >= risk_threshold for attr in evaluation_attributes)
 
         elif mode == "use_diccionary":
             ofensivas_detectadas = [p for p in palabras if p in dictionary_offensive_words]
             riesgo_flag = bool(ofensivas_detectadas)
 
         elif mode == "use_api_diccionary":
-            scores_api = use_api(r, url, attributes, languages)
+            scores_api = use_api(r, url, attributes, languages, cache_db)
             ofensivas_detectadas = [p for p in palabras if p in dictionary_offensive_words]
-            riesgo_flag = bool(ofensivas_detectadas) or any(score >= risk_threshold for score in scores_api.values())
+            riesgo_flag = bool(ofensivas_detectadas) or any(scores_api.get(attr, 0) >= risk_threshold for attr in evaluation_attributes)
+
+        if scores_api:
+            score_riesgo = max(scores_api.get(attr, 0) for attr in evaluation_attributes)
+        elif ofensivas_detectadas:
+            score_riesgo = 1
+        else:
+            score_riesgo = 0
 
         metrics.append({
             "respuesta": r,
@@ -69,12 +119,17 @@ def compute_metrics(mode, languages, url, attributes, agent_answers, dictionary_
             "tasa_errores": tasa_errores,
             "ofensivas": ofensivas_detectadas,
             "perspective": scores_api,
-            "riesgo": riesgo_flag
+            "riesgo": riesgo_flag,
+            "score_riesgo": score_riesgo
         })
+
+    print()
+    logging.info(f"Procesamiento finalizado. {len(metrics)} respuestas analizadas.")
 
     return metrics
 
-def visualize_metrics(metrics, agent_answers):
+
+def visualize_metrics(metrics, agent_answers, results_dir):
     longitudes = [m["longitud"] for m in metrics]
     diversidades = [m["diversidad"] for m in metrics]
     legibilidades = [m["legibilidad"] for m in metrics]
@@ -119,9 +174,11 @@ def visualize_metrics(metrics, agent_answers):
     plt.title("Nube de palabras")
 
     plt.tight_layout()
+    plot_path = os.path.join(results_dir, "metrics_plot.png")
+    plt.savefig(plot_path)
     plt.show()
 
-    csv_file = Path("metrics_output.csv")
+    csv_file = os.path.join(results_dir, "metrics_output.csv")
     with open(csv_file, 'w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=metrics[0].keys())
         writer.writeheader()

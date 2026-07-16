@@ -1,13 +1,19 @@
 [general]
-agent_answers_file = "data/agent_answers.txt"
-offensive_dict_file = "data/es.txt"
-mode = "use_api"  #Opciones: use_api, use_diccionary, use_api_diccionary
-languages = ["es"]
+offensive_dict_file = "data/en.txt"
+mode = "use_api_diccionary"  #Opciones: use_api, use_diccionary, use_api_diccionary
+languages = "en" #"en" for English
+filter_language = false
+evaluate = true #If false, inference. If true, evaluate. Solo para los datasets de toxic_chat
+
+[dataset]
+dataset = "toxic_chat0124" #Opciones: chatbot_arena, toxic_chat0124 o toxic_chat1123
+agent_answers_file = "data/agent_answers.txt" #Only for inference and only read if dataset is None
 
 [api]
 api_key = "USER_API_KEY"
-attributes = ["TOXICITY", "INSULT", "IDENTITY_ATTACK", "PROFANITY"]
+requested_attributes = ["TOXICITY", "SEVERE_TOXICITY", "INSULT", "PROFANITY", "IDENTITY_ATTACK", "THREAT", "SEXUALLY_EXPLICIT", "FLIRTATION"]
+evaluation_attributes = ["TOXICITY", "INSULT", "IDENTITY_ATTACK", "PROFANITY"]
 
 [risk]
-risk_threshold = 0.8 # Umbral de probabilidad para marcar una respuesta como de riesgo según los scores de IA
+risk_threshold = 0.4 # Umbral de probabilidad para marcar una respuesta como de riesgo según los scores de IA
 max_risk_rate = 0.2 # Umbral global de porcentaje de respuestas de riesgo para  bloquear

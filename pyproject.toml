@@ -1,0 +1,14 @@
+[project]
+name = "observability_and_control"
+version = "0.1.0"
+dependencies = [
+    "matplotlib",
+    "wordcloud",
+    "pyspellchecker",
+    "requests",
+    "toml",
+    "scikit-learn",
+    "datasets",
+    "huggingface_hub",
+    "langdetect"
+]
